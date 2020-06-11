@@ -52,7 +52,7 @@ func closeReader(rc io.ReadCloser) {
 	}
 }
 
-func handle(ctx context.Context) http.HandlerFunc {
+func handle(ctx context.Context, cancelFunc context.CancelFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			closeReader(r.Body)
@@ -73,11 +73,13 @@ func handle(ctx context.Context) http.HandlerFunc {
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Printf("Error piping content: %v\n", err)
+			return
 		}
 		err = cmd.Start()
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			log.Printf("Error starting: %v\n", err)
+			return
 		}
 		decoder := xml.NewDecoder(reader)
 		_, err = io.WriteString(w, "{\"tags\":[\n")
@@ -86,7 +88,9 @@ func handle(ctx context.Context) http.HandlerFunc {
 			token, err := decoder.Token()
 			if err != nil {
 				if err != io.EOF {
+					cancelFunc()
 					log.Printf("%v\n", err)
+					return
 				}
 				_, err := w.Write(nil)
 				if err != nil {
@@ -118,6 +122,7 @@ func handle(ctx context.Context) http.HandlerFunc {
 
 					err = json.NewEncoder(w).Encode(tag)
 					if err != nil {
+						cancelFunc()
 						log.Printf("Error writing: %v\n", err)
 					}
 				}
@@ -139,9 +144,10 @@ func main() {
 	shutdown := make(chan os.Signal, 1)
 	serviceErrors := make(chan error, 1)
 
+	http.HandleFunc("/tags", handle(ctx, cancelCommand))
+
 	server := http.Server{
-		Addr:    ":8080",
-		Handler: handle(ctx),
+		Addr: ":8080",
 	}
 
 	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
